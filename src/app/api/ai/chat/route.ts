@@ -4,14 +4,29 @@ import { logger } from '@/core/logging/logger';
 
 const aiClient = new OpenAIClient();
 
+// Handle preflight (OPTIONS)
+export async function OPTIONS() {
+    return new Response(null, {
+        status: 204,
+        headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+        },
+    });
+}
+
 export async function POST(req: Request) {
     try {
         const { message } = await req.json();
 
         if (!message) {
-            return Response.json(
-                { error: 'Message is required' },
-                { status: 400 }
+            return new Response(
+                JSON.stringify({ error: 'Message is required' }),
+                {
+                    status: 400,
+                    headers: corsHeaders(),
+                }
             );
         }
 
@@ -20,13 +35,30 @@ export async function POST(req: Request) {
         const prompt = buildChatPrompt(message);
         const reply = await aiClient.generateResponse(prompt);
 
-        return Response.json({ reply });
+        return new Response(
+            JSON.stringify({ reply }),
+            {
+                status: 200,
+                headers: corsHeaders(),
+            }
+        );
     } catch (error) {
         logger.error('AI request failed');
 
-        return Response.json(
-            { error: error instanceof Error ? error.message : 'AI service unavailable' },
-            { status: 500 }
+        return new Response(
+            JSON.stringify({ error: 'AI service unavailable' }),
+            {
+                status: 500,
+                headers: corsHeaders(),
+            }
         );
     }
+}
+
+function corsHeaders() {
+    return {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+    };
 }
