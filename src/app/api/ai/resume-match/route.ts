@@ -1,29 +1,17 @@
 import { OpenAIClient } from '@/core/ai/openai_client';
-import { buildChatPrompt } from '@/core/ai/prompt_builder';
 import { logger } from '@/core/logging/logger';
 import { corsHeaders } from '../../helper';
+import { buildJobPrompt } from '@/core/ai/prompt_job';
 
 const aiClient = new OpenAIClient();
 
-// Handle preflight (OPTIONS)
-// export async function OPTIONS() {
-//     return new Response(null, {
-//         status: 204,
-//         headers: {
-//             'Access-Control-Allow-Origin': '*',
-//             'Access-Control-Allow-Methods': 'POST, OPTIONS',
-//             'Access-Control-Allow-Headers': 'Content-Type',
-//         },
-//     });
-// }
-
 export async function POST(req: Request) {
     try {
-        const { message } = await req.json();
+        const { resume, jobDescription } = await req.json();
 
-        if (!message) {
+        if (!resume || !jobDescription) {
             return new Response(
-                JSON.stringify({ error: 'Message is required' }),
+                JSON.stringify({ error: 'Resume and job description are required' }),
                 {
                     status: 400,
                     headers: corsHeaders(),
@@ -33,7 +21,7 @@ export async function POST(req: Request) {
 
         logger.info('AI request received');
 
-        const prompt = buildChatPrompt(message);
+        const prompt = buildJobPrompt(resume, jobDescription);
         const reply = await aiClient.generateResponse(prompt);
 
         return new Response(
