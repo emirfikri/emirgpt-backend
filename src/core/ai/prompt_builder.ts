@@ -1,11 +1,12 @@
 export function buildChatPrompt(userMessage: string): string {
-    return `
-You are a helpful, concise AI assistant.
-Respond clearly and professionally.
+    return `${userMessage}`;
+    //     return `
+    // You are a helpful, concise AI assistant.
+    // Respond clearly and professionally.
 
-User:
-${userMessage}
+    // User:
+    // ${userMessage}
 
-Assistant:
-`;
+    // Assistant:
+    // `;
 }
