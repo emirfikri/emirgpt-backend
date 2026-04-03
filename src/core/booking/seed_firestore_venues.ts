@@ -1,10 +1,10 @@
-import { initializeApp, applicationDefault } from 'firebase-admin/app';
+import { initializeApp, applicationDefault, getApps, getApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 /// This script seeds the Firestore database with initial venue data for testing and development purposes.
 // Initialize Firebase Admin SDK
-const app = initializeApp({
-    credential: applicationDefault(),
-});
+const app = getApps().length
+    ? getApp()
+    : initializeApp({ credential: applicationDefault() });
 const db = getFirestore(app);
 
 const venues = [
