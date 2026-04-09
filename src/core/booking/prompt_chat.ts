@@ -21,6 +21,8 @@ const { malaysiaDate, malaysiaTime, malaysiaDay, malaysiaDayName, malaysiaNowIso
 const daysToNextMonday = ((1 - malaysiaDay + 7) % 7) || 7;
 const nextMondayMalaysia = new Date(today.getTime() + daysToNextMonday * 24 * 60 * 60 * 1000 + 8 * 60 * 60 * 1000);
 const nextMondayDate = nextMondayMalaysia.toISOString().slice(0, 10);
+const tomorrowMalaysia = new Date(today.getTime() + 1 * 24 * 60 * 60 * 1000 + 8 * 60 * 60 * 1000);
+const tomorrowDate = tomorrowMalaysia.toISOString().slice(0, 10);
 
 return`
 Extract booking details from user input.
@@ -41,6 +43,8 @@ Instructions:
 - If the user gives an exact date (e.g., '2026-07-01'), use that exact calendar date.
 - If the user gives an explicit time such as '6pm', '18:00', or '8.30pm', preserve that exact Malaysia local time. Do not replace it with the current clock time.
 - If the user says 'today 6pm', the booking must be on ${malaysiaDate} at 18:00 Malaysia time, which is 10:00:00Z in UTC.
+- If the user does not specify a date (or says 'today') and the requested time is BEFORE the current Malaysia time (${malaysiaTime}), use TOMORROW (${tomorrowDate}) as the date instead.
+- Example: current time is ${malaysiaTime}, user says "badminton 11am" → 11:00 is before ${malaysiaTime}, so use ${tomorrowDate} not ${malaysiaDate}.
 - Validation rule: if user requested a weekday, startDate must match that weekday. If not, recompute before returning JSON.
 - Validation rule: if user requested an explicit time, startDate must match that exact requested time in Malaysia timezone.
 
@@ -55,7 +59,7 @@ ${venueList.map(venue => `- ${venue.id} ${venue.name}, ${venue.tags.join(', ')} 
 
 Output JSON:
 {
-  intent: "book" | "cancel" | "faq" | "other",
+  intent: "book" | "cancel" | "faq",
   sport,
   startDate, (always in ISO 8601, UTC)
   endDate (always 1 hour after startDate), (ISO 8601, UTC)
@@ -65,6 +69,9 @@ Output JSON:
   pricePerHour:number[],
   reply: string,
 }
+else if the intent is not "book", 
+answer in less than 50 words the user question based on your knowledge or use the provided venue information, or
+based on this link https://puncak.ai/privacy-policy/ and the user question is "${userPrompt}"
 `
 ;
 }

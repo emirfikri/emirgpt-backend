@@ -60,3 +60,26 @@ export async function createBooking(bookingActionPrompt: BookingActionPrompt) {
     const updatedBooking = await updatedBookingRef.get();
     return { ...updatedBooking.data(), id: updatedBooking.id };
 }
+
+// Returns all confirmed bookings for the given venueIds on a specific calendar date (Malaysia time)
+export async function getBookedSlotsForDate(venueIds: string[], dateMalaysia: Date) {
+    const dayStart = new Date(Date.UTC(dateMalaysia.getUTCFullYear(), dateMalaysia.getUTCMonth(), dateMalaysia.getUTCDate(), 0 - 8, 0));
+    const dayEnd   = new Date(Date.UTC(dateMalaysia.getUTCFullYear(), dateMalaysia.getUTCMonth(), dateMalaysia.getUTCDate(), 24 - 8, 0));
+
+    const results = await Promise.all(
+        venueIds.map(async (venueId) => {
+            const snapshot = await db.collection('bookings')
+                .where('venueId', '==', venueId)
+                .where('status', '==', 'confirmed')
+                .where('startDate', '>=', Timestamp.fromDate(dayStart))
+                .where('startDate', '<', Timestamp.fromDate(dayEnd))
+                .get();
+            return snapshot.docs.map(doc => ({
+                venueId,
+                startDate: (doc.data().startDate as Timestamp).toDate(),
+                endDate: (doc.data().endDate as Timestamp).toDate(),
+            }));
+        })
+    );
+    return results.flat();
+}

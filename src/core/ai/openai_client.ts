@@ -10,7 +10,7 @@ export class OpenAIClient implements AIClient {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'gpt-4.1-nano',
+                model: 'gpt-4.1-nano',//'gpt-5-nano-2025-08-07',//,
                 messages: [{ role: 'user', content: prompt }],
             }),
         });

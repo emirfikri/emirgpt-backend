@@ -1,8 +1,8 @@
 import { OpenAIClient } from '@/core/ai/openai_client';
 import { logger } from '@/core/logging/logger';
-import { buildUtcDateFromMalaysiaParts, corsHeaders, getCurrentDate, getMalaysiaNow, getSportMatchedVenues, parseRequestedMalaysiaDate, parseRequestedTime, userSpecifiedVenue } from '../../helper';
+import { buildUtcDateFromMalaysiaParts, corsHeaders, getCurrentDate, getExplicitlyRequestedVenues, getMalaysiaNow, getSportMatchedVenues, parseRequestedMalaysiaDate, parseRequestedTime, userSpecifiedVenue } from '../../helper';
 import { buildBookVenuePrompt } from '@/core/booking/prompt_chat';
-import { checkAvailability, fetchAllVenuesFromFirestore } from '@/core/booking/google_firestore';
+import { checkAvailability, fetchAllVenuesFromFirestore, getBookedSlotsForDate } from '@/core/booking/google_firestore';
 import { BookingReplyAi } from '@/core/booking/model/bookingReplyAi';
 import { BookingActionPrompt } from '@/core/booking/model/bookingConfirmation';
 import { Venue } from '@/core/booking/model/venue';
@@ -30,6 +30,12 @@ function normalizeBookingWindow(message: string, now: Date, startDate: Date | st
         : 60 * 60 * 1000;
 
     const normalizedStartDate = buildUtcDateFromMalaysiaParts(year, month, day, startHour, startMinute);
+
+    // If the user only specified a time (no date), and that time has already passed today in Malaysia, advance to tomorrow.
+    if (!requestedDate && requestedTime && normalizedStartDate <= now) {
+        normalizedStartDate.setUTCDate(normalizedStartDate.getUTCDate() + 1);
+    }
+
     const normalizedEndDate = new Date(normalizedStartDate.getTime() + durationMs);
 
     return {
@@ -49,7 +55,8 @@ function mergeVenueCandidates(message: string, replyParsed: BookingReplyAi, venu
     const explicitVenueRequested = userSpecifiedVenue(message, venues);
 
     if (explicitVenueRequested) {
-        return venues.filter((venue) => aiVenueIdSet.has(venue.id));
+        // User named a venue — match directly from message, ignore AI venueId
+        return getExplicitlyRequestedVenues(message, venues);
     }
 
     const sportMatchedVenues = getSportMatchedVenues(venues, replyParsed.sport);
@@ -62,6 +69,73 @@ function mergeVenueCandidates(message: string, replyParsed: BookingReplyAi, venu
 
 
 const aiClient = new OpenAIClient();
+
+// Generate free 1-hour slots around the requested time for the candidate venues.
+// Returns up to `beforeCount` slots before and `afterCount` slots after the requested time.
+function getSuggestedSlots(
+    bookedSlots: { venueId: string; startDate: Date; endDate: Date }[],
+    candidateVenueIds: string[],
+    requestedStart: Date,
+    venues: Venue[],
+    beforeCount = 2,
+    afterCount = 2,
+) {
+    const OPEN_HOUR = 8;  // 8am Malaysia
+    const CLOSE_HOUR = 22; // 10pm Malaysia
+    const MALAYSIA_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+    const malaysiaDt = new Date(requestedStart.getTime() + MALAYSIA_OFFSET_MS);
+    const year = malaysiaDt.getUTCFullYear();
+    const month = malaysiaDt.getUTCMonth();
+    const day = malaysiaDt.getUTCDate();
+    const requestedHour = malaysiaDt.getUTCHours();
+
+    const now = new Date();
+
+    function isSlotFree(venueId: string, slotStart: Date, slotEnd: Date) {
+        return !bookedSlots.some(
+            b => b.venueId === venueId && b.startDate < slotEnd && b.endDate > slotStart
+        );
+    }
+
+    function buildSlot(venueId: string, hour: number) {
+        const slotStart = new Date(Date.UTC(year, month, day, hour - 8, 0));
+        const slotEnd = new Date(slotStart.getTime() + 60 * 60 * 1000);
+        if (slotStart <= now) return null;
+        for (const vid of venueId ? [venueId] : candidateVenueIds) {
+            if (isSlotFree(vid, slotStart, slotEnd)) {
+                return {
+                    venueId: vid,
+                    venueName: venues.find(v => v.id === vid)?.name,
+                    startDate: slotStart.toISOString(),
+                    endDate: slotEnd.toISOString(),
+                };
+            }
+        }
+        return null;
+    }
+
+    const beforeSlots: ReturnType<typeof buildSlot>[] = [];
+    const afterSlots: ReturnType<typeof buildSlot>[] = [];
+
+    // Collect slots after requested time
+    for (let hour = requestedHour + 1; hour < CLOSE_HOUR && afterSlots.length < afterCount; hour++) {
+        for (const venueId of candidateVenueIds) {
+            const slot = buildSlot(venueId, hour);
+            if (slot) { afterSlots.push(slot); break; }
+        }
+    }
+
+    // Collect slots before requested time (scan backwards)
+    for (let hour = requestedHour - 1; hour >= OPEN_HOUR && beforeSlots.length < beforeCount; hour--) {
+        for (const venueId of candidateVenueIds) {
+            const slot = buildSlot(venueId, hour);
+            if (slot) { beforeSlots.unshift(slot); break; }
+        }
+    }
+
+    return [...beforeSlots, ...afterSlots].filter(Boolean) as { venueId: string; venueName?: string; startDate: string; endDate: string }[];
+}
 
 // Handle preflight (OPTIONS)
 export async function OPTIONS() {
@@ -141,9 +215,27 @@ export async function POST(req: Request) {
                 notes: ''
             };
         }
-        if (replyParsed.startDate && replyParsed.endDate && Array.isArray(replyParsed.venueId) && availableVenues.length < 1 && replyParsed.intent === 'book') {
-            replyParsed.reply = 'Sorry, the venue(s) you requested are not available for the selected time slot. Please choose a different time or venue.';
-        } 
+        if (replyParsed.startDate && replyParsed.endDate && Array.isArray(replyParsed.venueId) && availableVenues.length < 1 && replyParsed.venueId.length > 0 && replyParsed.intent === 'book') {
+            // Fetch booked slots for the requested date and suggest alternatives
+            const bookedSlots = await getBookedSlotsForDate(replyParsed.venueId, new Date(replyParsed.startDate));
+            const suggestedSlots = getSuggestedSlots(bookedSlots, replyParsed.venueId, new Date(replyParsed.startDate), venues);
+
+            const slotSummary = suggestedSlots.map(s => {
+                const mStart = new Date(new Date(s.startDate).getTime() + 8 * 60 * 60 * 1000);
+                const mEnd   = new Date(new Date(s.endDate).getTime() + 8 * 60 * 60 * 1000);
+                const fmt = (d: Date) => `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+                return `${fmt(mStart)}–${fmt(mEnd)}`;
+            }).join(', ');
+
+            replyParsed.reply = slotSummary
+                ? `Sorry, that slot is taken. Available slots on the same day: ${slotSummary} (Malaysia time).`
+                : 'Sorry, the venue(s) you requested are not available for the selected time slot. Please choose a different time or venue.';
+
+            return new Response(
+                JSON.stringify({ reply: replyParsed, available: availableVenues, venuePromptConfirmation: null, suggestedSlots:suggestedSlots }),
+                { status: 200, headers: corsHeaders() }
+            );
+        }
         
         return new Response(
             JSON.stringify({ reply: replyParsed, available: availableVenues, venuePromptConfirmation: venuePromptConfirmation}),

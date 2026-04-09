@@ -42,6 +42,17 @@ export function addMalaysiaDays(date: Date, days: number) {
 }
 
 export function parseRequestedTime(message: string) {
+    // Handle time ranges like "8-9pm", "8–9pm", "8.30-9.30pm" — always take the START time
+    const rangeMatch = message.match(/\b(\d{1,2})(?:[:.](\d{2}))?[\s]*[-–—][\s]*\d{1,2}(?:[:.](\d{2}))?\s*(am|pm)\b/i);
+    if (rangeMatch) {
+        const hourValue = Number(rangeMatch[1]);
+        const minuteValue = Number(rangeMatch[2] || '0');
+        const period = rangeMatch[4].toLowerCase();
+        let hour = hourValue % 12;
+        if (period === 'pm') hour += 12;
+        return { hour, minute: minuteValue };
+    }
+
     const amPmMatch = message.match(/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b/i);
     if (amPmMatch) {
         const hourValue = Number(amPmMatch[1]);
@@ -121,9 +132,34 @@ export function normalizeText(value: string) {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-export function userSpecifiedVenue(message: string, venues: Venue[]) {
+function escapeRegex(str: string) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// a simple bigram matching score to determine if the user explicitly mentioned a venue in their message,
+//  by checking for presence of consecutive word pairs from the venue name in the user message.
+//  This is to give higher priority to user explicitly mentioning a venue,
+//  than just relying on AI suggested venueId which can be noisy and less accurate.
+function bigramScore(normalizedMessage: string, venue: Venue): number {
+    const words = normalizeText(venue.name).split(' ');
+    let score = 0;
+    for (let i = 0; i < words.length - 1; i++) {
+        const pattern = new RegExp(`\\b${escapeRegex(words[i])}\\s+${escapeRegex(words[i + 1])}\\b`);
+        if (pattern.test(normalizedMessage)) score++;
+    }
+    return score;
+}
+
+export function getExplicitlyRequestedVenues(message: string, venues: Venue[]) {
     const normalizedMessage = normalizeText(message);
-    return venues.some((venue) => normalizedMessage.includes(normalizeText(venue.name)));
+    const scored = venues.map(venue => ({ venue, score: bigramScore(normalizedMessage, venue) }));
+    const maxScore = Math.max(...scored.map(s => s.score));
+    if (maxScore === 0) return [];
+    return scored.filter(s => s.score === maxScore).map(s => s.venue);
+}
+
+export function userSpecifiedVenue(message: string, venues: Venue[]) {
+    return getExplicitlyRequestedVenues(message, venues).length > 0;
 }
 
 export function getSportMatchedVenues(venues: Venue[], sport: string | undefined) {
